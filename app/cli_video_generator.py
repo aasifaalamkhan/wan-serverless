@@ -115,7 +115,7 @@ class CLIVideoGenerator:
             if torch.cuda.is_available():
                 total_memory = torch.cuda.get_device_properties(0).total_memory
                 logger.info(f"Detected GPU with {total_memory / (1024**3):.2f} GB VRAM")
-                if total_memory > 60 * 1024 * 1024 * 1024:  # Greater than 60GB VRAM (e.g., 80GB cards like A100/H100)
+                if total_memory > 30 * 1024 * 1024 * 1024:  # Greater than 30GB VRAM (e.g., 40GB/80GB cards)
                     logger.info("🚀 High-end GPU detected. Disabling CPU offloading for maximum speed.")
                     return True
         except Exception as e:
