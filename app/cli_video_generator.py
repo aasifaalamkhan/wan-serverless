@@ -59,27 +59,17 @@ class CLIVideoGenerator:
         """Get optimal size for specific model"""
         # First check if resolution preset is provided
         if resolution_preset:
-            # TI2V-5B/VACE-1.3B only supports 1280*704 or 704*1280
-            if model_type in ["TI2V-5B", "VACE-1.3B"]:
-                if "vertical" in resolution_preset:
-                    logger.info(f"Mapping preset {resolution_preset} to 704*1280 for {model_type}")
-                    return "704*1280"
-                else:
-                    logger.info(f"Mapping preset {resolution_preset} to 1280*704 for {model_type}")
-                    return "1280*704"
-            
             preset_size = self.get_size_from_preset(resolution_preset)
             if preset_size:
                 return preset_size
 
         # Then check model-specific defaults
         if model_type == "I2V-14B-480P":
-            return "832*480"
+            return "832*480"  # Using WAN CLI supported size
         elif model_type == "I2V-14B-720P":
             return "1280*720"
         elif model_type == "VACE-1.3B":
-            # If no preset was passed, default to horizontal size supported by the underlying 5B model
-            return "1280*704"
+            return "832*480"  # VACE has its own optimal size
         else:
             # For other models, use provided dimensions or default
             if width and height:
