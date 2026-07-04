@@ -155,17 +155,14 @@ class CLIVideoGenerator:
         ]
 
         # Optional arguments
-        if negative_prompt:
-            args.extend(["--negative_prompt", negative_prompt])
-
         if seed is not None:
-            args.extend(["--seed", str(seed)])
+            args.extend(["--base_seed", str(seed)])
 
         if num_inference_steps != 50:
-            args.extend(["--num_inference_steps", str(num_inference_steps)])
+            args.extend(["--sample_steps", str(num_inference_steps)])
 
         if guidance_scale != 5.0:
-            args.extend(["--guidance_scale", str(guidance_scale)])
+            args.extend(["--sample_guide_scale", str(guidance_scale)])
 
         # Combine all arguments
         full_cmd = cmd + args + multi_gpu_args
