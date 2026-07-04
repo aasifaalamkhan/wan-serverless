@@ -111,13 +111,15 @@ class CLIVideoGenerator:
     def is_high_end_gpu(self):
         """Check if running on a high-end GPU (A100, H100) where CPU offloading is not needed"""
         try:
-            result = subprocess.run(['nvidia-smi', '-L'], capture_output=True, text=True, check=True)
-            gpu_info = result.stdout.lower()
-            if 'h100' in gpu_info or 'a100' in gpu_info or '80gb' in gpu_info or 'a6000' in gpu_info:
-                logger.info("🚀 High-end GPU detected. Disabling CPU offloading for maximum speed.")
-                return True
-        except Exception:
-            pass
+            import torch
+            if torch.cuda.is_available():
+                total_memory = torch.cuda.get_device_properties(0).total_memory
+                logger.info(f"Detected GPU with {total_memory / (1024**3):.2f} GB VRAM")
+                if total_memory > 30 * 1024 * 1024 * 1024:  # Greater than 30GB VRAM (e.g., 40GB/80GB cards)
+                    logger.info("🚀 High-end GPU detected. Disabling CPU offloading for maximum speed.")
+                    return True
+        except Exception as e:
+            logger.warning(f"Could not check GPU properties via PyTorch: {e}")
         return False
 
     def build_generation_command(self, task, size, image_path, prompt, negative_prompt="",
