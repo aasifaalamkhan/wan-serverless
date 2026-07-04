@@ -1,4 +1,4 @@
-FROM runpod/base:0.7.0-ubuntu2204-cuda1281
+FROM runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
@@ -10,25 +10,17 @@ ENV HF_HUB_ENABLE_HF_TRANSFER=1
 
 RUN mkdir -p /app
 
-# --- Install PyTorch 2.7 (CUDA 12.8) and torchvision ---
-RUN python3.10 -m pip install --upgrade pip && \
-    pip install \
-      torch==2.8.0+cu128 \
-      torchvision==0.23.0+cu128 \
-      --index-url https://download.pytorch.org/whl/cu128
-
-# --- Install FlashAttention from prebuilt wheel (compatible with torch 2.7) ---
-RUN python3.10 -m pip install \
-    https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3+cu12torch2.8cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
+# --- Install FlashAttention from prebuilt wheel (compatible with torch 2.4 and python 3.11) ---
+RUN pip install \
+    https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.0.post2/flash_attn-2.7.0.post2+cu124torch2.4cxx11abiFALSE-cp311-cp311-linux_x86_64.whl
 
 # Copy and install Python dependencies (excluding flash_attn to avoid rebuild)
 COPY requirements.txt /tmp/requirements.txt
-RUN python3.10 -m pip install -r /tmp/requirements.txt && rm /tmp/requirements.txt
-
+RUN pip install -r /tmp/requirements.txt && rm /tmp/requirements.txt
 
 # Copy application files
 COPY ./app /app
 COPY ./wan /wan
 
 WORKDIR /app
-CMD ["python3.10", "-u", "/app/rp_handler.py"]
+CMD ["python3", "-u", "/app/rp_handler.py"]
