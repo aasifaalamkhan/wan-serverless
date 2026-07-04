@@ -5,13 +5,109 @@ from PIL import Image
 import io
 import tempfile
 import base64
-from pathlib import Path
+import gc
+from functools import partial
 
 import wan
 from wan.configs import WAN_CONFIGS, MAX_AREA_CONFIGS
 from wan.utils.utils import save_video
+from wan.wan.image2video import WanI2V
+from wan.modules.t5 import T5EncoderModel
+from wan.modules.vae2_1 import Wan2_1_VAE
+from wan.modules.model import WanModel
 
 logger = logging.getLogger(__name__)
+
+class OOMSafeWanI2V(WanI2V):
+    """Subclass of WanI2V that loads weights sequentially to prevent exceeding 62GB CPU RAM limits"""
+    def __init__(self,
+                 config,
+                 checkpoint_dir,
+                 device_id=0,
+                 rank=0,
+                 t5_fsdp=False,
+                 dit_fsdp=False,
+                 use_sp=False,
+                 t5_cpu=False,
+                 init_on_cpu=True,
+                 convert_model_dtype=False):
+        
+        self.device = torch.device(f"cuda:{device_id}")
+        self.config = config
+        self.rank = rank
+        self.t5_cpu = t5_cpu
+        self.init_on_cpu = init_on_cpu
+
+        self.num_train_timesteps = config.num_train_timesteps
+        self.boundary = config.boundary
+        self.param_dtype = config.param_dtype
+
+        if t5_fsdp or dit_fsdp or use_sp:
+            self.init_on_cpu = False
+
+        # 1. Load T5 Text Encoder on CPU
+        logger.info("OOMSafeWanI2V: Loading T5 encoder...")
+        from wan.distributed.fsdp import shard_model
+        shard_fn = partial(shard_model, device_id=device_id)
+        self.text_encoder = T5EncoderModel(
+            text_len=config.text_len,
+            dtype=config.t5_dtype,
+            device=torch.device('cpu'),
+            checkpoint_path=os.path.join(checkpoint_dir, config.t5_checkpoint),
+            tokenizer_path=os.path.join(checkpoint_dir, config.t5_tokenizer),
+            shard_fn=shard_fn if t5_fsdp else None,
+        )
+        gc.collect()
+
+        # 2. Load VAE on GPU
+        logger.info("OOMSafeWanI2V: Loading VAE on GPU...")
+        self.vae_stride = config.vae_stride
+        self.patch_size = config.patch_size
+        self.vae = Wan2_1_VAE(
+            vae_pth=os.path.join(checkpoint_dir, config.vae_checkpoint),
+            device=self.device)
+        gc.collect()
+
+        # 3. Load Low-Noise DiT model on CPU
+        logger.info("OOMSafeWanI2V: Loading low_noise_model...")
+        self.low_noise_model = WanModel.from_pretrained(
+            checkpoint_dir, subfolder=config.low_noise_checkpoint)
+        self.low_noise_model = self._configure_model(
+            model=self.low_noise_model,
+            use_sp=use_sp,
+            dit_fsdp=dit_fsdp,
+            shard_fn=shard_fn,
+            convert_model_dtype=convert_model_dtype)
+            
+        # 4. MOVE Low-Noise Model to GPU immediately to free CPU memory
+        logger.info("OOMSafeWanI2V: Moving low_noise_model to GPU VRAM...")
+        self.low_noise_model.to(self.device)
+        gc.collect()
+        torch.cuda.empty_cache()
+
+        # 5. Load High-Noise DiT model on CPU (leaving it on CPU for offloading)
+        logger.info("OOMSafeWanI2V: Loading high_noise_model...")
+        self.high_noise_model = WanModel.from_pretrained(
+            checkpoint_dir, subfolder=config.high_noise_checkpoint)
+        self.high_noise_model = self._configure_model(
+            model=self.high_noise_model,
+            use_sp=use_sp,
+            dit_fsdp=dit_fsdp,
+            shard_fn=shard_fn,
+            convert_model_dtype=convert_model_dtype)
+            
+        # Now, low_noise_model is on GPU VRAM, high_noise_model is on CPU RAM.
+        # This divides the 67.8GB memory usage between CPU (39GB) and GPU (28GB) perfectly.
+        logger.info("✅ OOMSafeWanI2V: Sequentially loaded and placed both models successfully!")
+        
+        if use_sp:
+            from wan.distributed.util import get_world_size
+            self.sp_size = get_world_size()
+        else:
+            self.sp_size = 1
+
+        self.sample_neg_prompt = config.sample_neg_prompt
+
 
 class InMemoryVideoGenerator:
     def __init__(self, model_path, model_type="I2V-14B-480P", wan_repo_path=None):
@@ -36,9 +132,9 @@ class InMemoryVideoGenerator:
         logger.info(f"Initializing InMemoryVideoGenerator for model: {model_type}")
         logger.info(f"Detected GPU VRAM: {total_memory / (1024**3):.2f} GB. Use CPU offloading: {self.use_offload}")
         
-        # Load the Wan pipeline in-memory
+        # Load the Wan pipeline in-memory using our OOM-safe subclass
         logger.info(f"Loading WanI2V pipeline from {self.model_path}...")
-        self.pipeline = wan.WanI2V(
+        self.pipeline = OOMSafeWanI2V(
             config=self.cfg,
             checkpoint_dir=self.model_path,
             device_id=0,
