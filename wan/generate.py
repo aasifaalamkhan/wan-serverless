@@ -383,7 +383,6 @@ def generate(args):
             dit_fsdp=args.dit_fsdp,
             use_sp=(args.ulysses_size > 1),
             t5_cpu=args.t5_cpu,
-            init_on_cpu=args.offload_model,
             convert_model_dtype=args.convert_model_dtype,
         )
 
@@ -409,7 +408,6 @@ def generate(args):
             dit_fsdp=args.dit_fsdp,
             use_sp=(args.ulysses_size > 1),
             t5_cpu=args.t5_cpu,
-            init_on_cpu=args.offload_model,
             convert_model_dtype=args.convert_model_dtype,
         )
 
@@ -437,7 +435,6 @@ def generate(args):
             dit_fsdp=args.dit_fsdp,
             use_sp=(args.ulysses_size > 1),
             t5_cpu=args.t5_cpu,
-            init_on_cpu=args.offload_model,
             convert_model_dtype=args.convert_model_dtype,
         )
         logging.info(f"Generating video ...")
@@ -473,7 +470,6 @@ def generate(args):
             dit_fsdp=args.dit_fsdp,
             use_sp=(args.ulysses_size > 1),
             t5_cpu=args.t5_cpu,
-            init_on_cpu=args.offload_model,
             convert_model_dtype=args.convert_model_dtype,
         )
 
