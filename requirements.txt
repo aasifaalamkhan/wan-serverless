@@ -39,3 +39,5 @@ librosa
 decord
 modelscope
 GitPython
+fastapi
+uvicorn
