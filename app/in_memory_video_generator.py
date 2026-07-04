@@ -11,7 +11,7 @@ from functools import partial
 import wan
 from wan.configs import WAN_CONFIGS, MAX_AREA_CONFIGS
 from wan.utils.utils import save_video
-from wan.wan.image2video import WanI2V
+from wan.image2video import WanI2V
 from wan.modules.t5 import T5EncoderModel
 from wan.modules.vae2_1 import Wan2_1_VAE
 from wan.modules.model import WanModel
