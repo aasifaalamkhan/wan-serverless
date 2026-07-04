@@ -12,7 +12,7 @@ RUN mkdir -p /app
 
 # --- Install FlashAttention from prebuilt wheel (compatible with torch 2.4 and python 3.11) ---
 RUN pip install \
-    https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.0.post2/flash_attn-2.7.0.post2+cu124torch2.4cxx11abiFALSE-cp311-cp311-linux_x86_64.whl
+    https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3.post1/flash_attn-2.8.3.post1+cu12torch2.4cxx11abiFALSE-cp311-cp311-linux_x86_64.whl
 
 # Copy and install Python dependencies (excluding flash_attn to avoid rebuild)
 COPY requirements.txt /tmp/requirements.txt
