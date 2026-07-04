@@ -51,20 +51,21 @@ def initialize_models():
         logger.info(f"Model setup complete: {model_info}")
         
         use_mock = os.getenv("USE_MOCK_GENERATOR", "false").lower() == "true"
-        wan_repo_path = os.getenv("WAN_REPO_PATH", "/workspace/wan-serverless/wan")
-        
-        generator = create_cli_generator(
-            model_path=model_info["model_path"],
-            model_type=model_info["model_type"],
-            use_mock=use_mock,
-            wan_repo_path=wan_repo_path
-        )
-        
+        if use_mock:
+            from cli_video_generator import create_cli_generator
+            wan_repo_path = os.getenv("WAN_REPO_PATH", "/workspace/wan-serverless/wan")
+            generator = create_cli_generator("", "I2V-14B-480P", use_mock=True, wan_repo_path=wan_repo_path)
+        else:
+            from in_memory_video_generator import InMemoryVideoGenerator
+            generator = InMemoryVideoGenerator(
+                model_path=model_info["model_path"],
+                model_type=model_info["model_type"]
+            )
         logger.info("✅ Video generator initialized successfully")
-        
     except Exception as e:
         logger.error(f"❌ Failed to initialize models: {e}")
         logger.info("🔄 Falling back to mock CLI generator...")
+        from cli_video_generator import create_cli_generator
         wan_repo_path = os.getenv("WAN_REPO_PATH", "/workspace/wan-serverless/wan")
         generator = create_cli_generator("", "I2V-14B-480P", use_mock=True, wan_repo_path=wan_repo_path)
 
