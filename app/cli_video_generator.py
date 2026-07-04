@@ -108,6 +108,18 @@ class CLIVideoGenerator:
             logger.warning("Could not detect GPU count, defaulting to 1")
             return 1
 
+    def is_high_end_gpu(self):
+        """Check if running on a high-end GPU (A100, H100) where CPU offloading is not needed"""
+        try:
+            result = subprocess.run(['nvidia-smi', '-L'], capture_output=True, text=True, check=True)
+            gpu_info = result.stdout.lower()
+            if 'h100' in gpu_info or 'a100' in gpu_info or '80gb' in gpu_info or 'a6000' in gpu_info:
+                logger.info("🚀 High-end GPU detected. Disabling CPU offloading for maximum speed.")
+                return True
+        except Exception:
+            pass
+        return False
+
     def build_generation_command(self, task, size, image_path, prompt, negative_prompt="",
                                num_inference_steps=50, guidance_scale=5.0, seed=None,
                                use_multi_gpu=True):
@@ -142,6 +154,9 @@ class CLIVideoGenerator:
             cmd = ["python", str(self.wan_repo_path / "generate.py")]
             multi_gpu_args = []
 
+        # Disable offloading for high-end GPUs to prevent PCIe speed bottlenecks
+        use_offload = "False" if self.is_high_end_gpu() else "True"
+
         # Core arguments - simplified to match official example
         args = [
             "--task", task,
@@ -150,7 +165,7 @@ class CLIVideoGenerator:
             "--image", image_path,
             "--prompt", prompt,
             "--save_file", str(save_file_path),
-            "--offload_model", "True",
+            "--offload_model", use_offload,
             "--convert_model_dtype"
         ]
 
@@ -186,21 +201,28 @@ class CLIVideoGenerator:
                 'TORCH_USE_CUDA_DSA': '1'  # Enable device-side assertions for debugging
             })
 
-            # Change to WAN repository directory
-            result = subprocess.run(
+            # Change to WAN repository directory and stream output in real-time
+            process = subprocess.Popen(
                 cmd,
                 cwd=str(self.wan_repo_path),
-                capture_output=True,
-                text=True,
-                timeout=timeout,
                 env=env,
-                check=True
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1
             )
 
-            logger.info("✅ Video generation completed successfully")
-            if result.stdout:
-                logger.info(f"Generation output: {result.stdout}")
+            # Stream generation logs to stdout
+            for line in process.stdout:
+                sys.stdout.write(line)
+                sys.stdout.flush()
 
+            process.wait()
+
+            if process.returncode != 0:
+                raise subprocess.CalledProcessError(process.returncode, cmd)
+
+            logger.info("✅ Video generation completed successfully")
             return True
 
         except subprocess.TimeoutExpired:
@@ -208,11 +230,7 @@ class CLIVideoGenerator:
             raise RuntimeError(f"Video generation timed out after {timeout} seconds")
         except subprocess.CalledProcessError as e:
             logger.error(f"❌ Generation failed with exit code {e.returncode}")
-            if e.stdout:
-                logger.error(f"STDOUT: {e.stdout}")
-            if e.stderr:
-                logger.error(f"STDERR: {e.stderr}")
-            raise RuntimeError(f"Video generation failed: {e.stderr}")
+            raise RuntimeError(f"Video generation failed with exit code {e.returncode}")
         except Exception as e:
             logger.error(f"❌ Unexpected error during generation: {e}")
             raise
