@@ -119,7 +119,7 @@ def worker_loop(gpu_idx: int, gen):
                         logger.error(f"Failed to send success callback: {cb_err}")
 
             except Exception as e:
-                logger.error(f"Job {job_id} failed: {e}")
+                logger.exception(f"Job {job_id} failed")
                 with jobs_lock:
                     jobs[job_id]["status"] = "failed"
                     jobs[job_id]["completed_at"] = time.time()
