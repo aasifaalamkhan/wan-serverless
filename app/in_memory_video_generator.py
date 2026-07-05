@@ -110,9 +110,10 @@ class OOMSafeWanI2V(WanI2V):
 
 
 class InMemoryVideoGenerator:
-    def __init__(self, model_path, model_type="I2V-14B-480P", wan_repo_path=None):
+    def __init__(self, model_path, model_type="I2V-14B-480P", wan_repo_path=None, device_id=0):
         self.model_path = model_path
         self.model_type = model_type
+        self.device_id = device_id
         
         # Map our model type to official task
         if "I2V-14B" in model_type or "i2v-A14B" in model_type:
@@ -126,20 +127,20 @@ class InMemoryVideoGenerator:
         
         # Determine offloading based on VRAM capacity, allowing override via environment variable FORCE_OFFLOAD
         force_offload = os.getenv("FORCE_OFFLOAD", "False").lower() in ("true", "1", "yes")
-        total_memory = torch.cuda.get_device_properties(0).total_memory
+        total_memory = torch.cuda.get_device_properties(self.device_id).total_memory
         self.use_offload = force_offload or (total_memory <= 60 * 1024 * 1024 * 1024)
         
-        logger.info(f"Initializing InMemoryVideoGenerator for model: {model_type}")
-        logger.info(f"Detected GPU VRAM: {total_memory / (1024**3):.2f} GB. Use CPU offloading: {self.use_offload}")
+        logger.info(f"Initializing InMemoryVideoGenerator for model: {model_type} on GPU {self.device_id}")
+        logger.info(f"Detected GPU VRAM on GPU {self.device_id}: {total_memory / (1024**3):.2f} GB. Use CPU offloading: {self.use_offload}")
         
         # Load the Wan pipeline in-memory. If high VRAM is available, use the official loader directly.
-        logger.info(f"Loading WanI2V pipeline from {self.model_path}...")
+        logger.info(f"Loading WanI2V pipeline from {self.model_path} on GPU {self.device_id}...")
         if not self.use_offload:
-            logger.info("High VRAM and RAM detected. Using official WanI2V loader directly on GPU.")
+            logger.info(f"High VRAM and RAM detected. Using official WanI2V loader directly on GPU {self.device_id}.")
             self.pipeline = WanI2V(
                 config=self.cfg,
                 checkpoint_dir=self.model_path,
-                device_id=0,
+                device_id=self.device_id,
                 rank=0,
                 t5_fsdp=False,
                 dit_fsdp=False,
@@ -149,11 +150,11 @@ class InMemoryVideoGenerator:
                 convert_model_dtype=False
             )
         else:
-            logger.info("Limited VRAM/RAM detected. Using OOM-safe sequential loader.")
+            logger.info(f"Limited VRAM/RAM detected. Using OOM-safe sequential loader on GPU {self.device_id}.")
             self.pipeline = OOMSafeWanI2V(
                 config=self.cfg,
                 checkpoint_dir=self.model_path,
-                device_id=0,
+                device_id=self.device_id,
                 rank=rank if 'rank' in locals() else 0,
                 t5_fsdp=False,
                 dit_fsdp=False,
