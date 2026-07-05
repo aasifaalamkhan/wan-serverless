@@ -164,7 +164,7 @@ class InMemoryVideoGenerator:
             )
         logger.info("✅ WanI2V pipeline loaded successfully inside memory!")
 
-    def generate_video(self, prompt, image, negative_prompt="", width=832, height=480, duration_seconds=3.0, fps=16, guidance_scale=5.0, num_inference_steps=20, seed=None, resolution_preset=None):
+    def generate_video(self, prompt, image, negative_prompt="", width=832, height=480, duration_seconds=3.0, fps=16, guidance_scale=3.5, num_inference_steps=30, seed=None, resolution_preset=None, sample_solver="dpm++"):
         """Generates video from prompt and image directly in-memory"""
         
         if not image:
@@ -199,7 +199,7 @@ class InMemoryVideoGenerator:
             
         max_area = MAX_AREA_CONFIGS.get(size_str, width * height)
         
-        logger.info(f"🚀 Running in-memory generation (Steps: {num_inference_steps}, Size: {size_str}, Seed: {seed})...")
+        logger.info(f"🚀 Running in-memory generation (Steps: {num_inference_steps}, Solver: {sample_solver}, Size: {size_str}, Seed: {seed})...")
         
         # 5. Execute pipeline in inference mode
         with torch.inference_mode():
@@ -209,7 +209,7 @@ class InMemoryVideoGenerator:
                 max_area=max_area,
                 frame_num=frame_num,
                 shift=5.0,
-                sample_solver="unipc",
+                sample_solver=sample_solver,
                 sampling_steps=num_inference_steps,
                 guide_scale=(guidance_scale, guidance_scale),
                 seed=seed,
@@ -224,7 +224,7 @@ class InMemoryVideoGenerator:
             save_video(
                 tensor=video[None],
                 save_file=tmp_path,
-                fps=self.cfg.sample_fps,
+                fps=fps,
                 nrow=1,
                 normalize=True,
                 value_range=(-1, 1)

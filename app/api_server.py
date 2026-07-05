@@ -38,6 +38,7 @@ class GenerationRequest(BaseModel):
     guidance_scale: Optional[float] = 5.0
     num_inference_steps: Optional[int] = 50
     seed: Optional[int] = None
+    sample_solver: Optional[str] = "dpm++"
     task_id: Optional[str] = None
     callback_url: Optional[str] = None
     webhook_secret: Optional[str] = None
@@ -83,7 +84,8 @@ def worker_loop(gpu_idx: int, gen):
                     guidance_scale=req.guidance_scale,
                     num_inference_steps=req.num_inference_steps,
                     seed=req.seed,
-                    resolution_preset=req.resolution_preset
+                    resolution_preset=req.resolution_preset,
+                    sample_solver=req.sample_solver
                 )
                 
                 with jobs_lock:
