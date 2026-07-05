@@ -8,6 +8,7 @@ import threading
 import uuid
 import queue
 import time
+import requests
 from model_downloader import ModelDownloader
 from check_cuda import is_cuda_available
 
@@ -38,6 +39,9 @@ class GenerationRequest(BaseModel):
     guidance_scale: Optional[float] = 5.0
     num_inference_steps: Optional[int] = 50
     seed: Optional[int] = None
+    task_id: Optional[str] = None
+    callback_url: Optional[str] = None
+    webhook_secret: Optional[str] = None
 
 def cleanup_old_jobs():
     """Delete completed/failed jobs that are older than 5 minutes to free RAM"""
@@ -99,12 +103,48 @@ def worker_loop():
                         "loras_loaded": len(model_info.get("lora_paths", [])) if model_info else 0
                     }
                     logger.info(f"Job {job_id} completed successfully")
+                
+                # Send webhook callback if callback_url is set
+                if req.callback_url:
+                    try:
+                        headers = {}
+                        if req.webhook_secret:
+                            headers["Authorization"] = f"Bearer {req.webhook_secret}"
+                        payload = {
+                            "taskId": req.task_id or job_id,
+                            "status": "completed",
+                            "video_base64": video_base64
+                        }
+                        logger.info(f"Sending success callback to {req.callback_url} for task {req.task_id or job_id}")
+                        res = requests.post(req.callback_url, json=payload, headers=headers, timeout=60)
+                        logger.info(f"Callback response status: {res.status_code}")
+                    except Exception as cb_err:
+                        logger.error(f"Failed to send success callback: {cb_err}")
+
             except Exception as e:
                 logger.error(f"Job {job_id} failed: {e}")
                 with jobs_lock:
                     jobs[job_id]["status"] = "failed"
                     jobs[job_id]["completed_at"] = time.time()
                     jobs[job_id]["error"] = str(e)
+                
+                # Send failure webhook callback if callback_url is set
+                if req.callback_url:
+                    try:
+                        headers = {}
+                        if req.webhook_secret:
+                            headers["Authorization"] = f"Bearer {req.webhook_secret}"
+                        payload = {
+                            "taskId": req.task_id or job_id,
+                            "status": "failed",
+                            "error": str(e)
+                        }
+                        logger.info(f"Sending failure callback to {req.callback_url} for task {req.task_id or job_id}")
+                        res = requests.post(req.callback_url, json=payload, headers=headers, timeout=60)
+                        logger.info(f"Callback response status: {res.status_code}")
+                    except Exception as cb_err:
+                        logger.error(f"Failed to send failure callback: {cb_err}")
+
             finally:
                 task_queue.task_done()
         except Exception as e:
