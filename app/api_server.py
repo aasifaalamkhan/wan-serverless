@@ -4,8 +4,11 @@ from typing import Optional
 import os
 import logging
 import base64
+import threading
+import uuid
+import queue
+import time
 from model_downloader import ModelDownloader
-from cli_video_generator import create_cli_generator
 from check_cuda import is_cuda_available
 
 logging.basicConfig(level=logging.INFO)
@@ -13,13 +16,15 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Wan Video Generation API", version="1.0")
 
-import threading
-
 # Global variables for model
 generator = None
 model_info = None
 generation_lock = threading.Lock()
 
+# Job tracking
+jobs = {}
+jobs_lock = threading.Lock()
+task_queue = queue.Queue()
 
 class GenerationRequest(BaseModel):
     prompt: str
@@ -33,6 +38,78 @@ class GenerationRequest(BaseModel):
     guidance_scale: Optional[float] = 5.0
     num_inference_steps: Optional[int] = 50
     seed: Optional[int] = None
+
+def cleanup_old_jobs():
+    """Delete completed/failed jobs that are older than 5 minutes to free RAM"""
+    with jobs_lock:
+        now = time.time()
+        to_delete = []
+        for j_id, j in jobs.items():
+            if j["status"] in ("completed", "failed"):
+                if now - j.get("completed_at", 0) > 300:
+                    to_delete.append(j_id)
+        for j_id in to_delete:
+            jobs.pop(j_id, None)
+
+def worker_loop():
+    """Background worker thread that serializes generation requests"""
+    global generator
+    while True:
+        try:
+            job_id, req = task_queue.get()
+            logger.info(f"Worker picked up job {job_id} for prompt: {req.prompt[:50]}")
+            
+            with jobs_lock:
+                jobs[job_id]["status"] = "running"
+                
+            try:
+                # Validate inputs inside thread
+                if req.duration_seconds <= 0:
+                    raise ValueError("duration_seconds must be greater than 0")
+                if req.fps <= 0 or req.fps > 60:
+                    raise ValueError("fps must be between 1 and 60")
+                
+                # Generate video (under global lock to prevent VAE shape mismatches/concurrency issues)
+                with generation_lock:
+                    video_base64 = generator.generate_video(
+                        prompt=req.prompt,
+                        image=req.image,
+                        negative_prompt=req.negative_prompt,
+                        width=req.width,
+                        height=req.height,
+                        duration_seconds=req.duration_seconds,
+                        fps=req.fps,
+                        guidance_scale=req.guidance_scale,
+                        num_inference_steps=req.num_inference_steps,
+                        seed=req.seed,
+                        resolution_preset=req.resolution_preset
+                    )
+                
+                with jobs_lock:
+                    jobs[job_id]["status"] = "completed"
+                    jobs[job_id]["completed_at"] = time.time()
+                    jobs[job_id]["result"] = {
+                        "video_base64": video_base64,
+                        "prompt": req.prompt,
+                        "duration_seconds": req.duration_seconds,
+                        "fps": req.fps,
+                        "resolution": f"{req.width}x{req.height}",
+                        "has_input_image": req.image is not None,
+                        "model_type": model_info.get("model_type", "unknown") if model_info else "mock",
+                        "loras_loaded": len(model_info.get("lora_paths", [])) if model_info else 0
+                    }
+                    logger.info(f"Job {job_id} completed successfully")
+            except Exception as e:
+                logger.error(f"Job {job_id} failed: {e}")
+                with jobs_lock:
+                    jobs[job_id]["status"] = "failed"
+                    jobs[job_id]["completed_at"] = time.time()
+                    jobs[job_id]["error"] = str(e)
+            finally:
+                task_queue.task_done()
+        except Exception as e:
+            logger.error(f"Error in worker loop: {e}")
+            time.sleep(1)
 
 @app.on_event("startup")
 def initialize_models():
@@ -72,6 +149,11 @@ def initialize_models():
         from cli_video_generator import create_cli_generator
         wan_repo_path = os.getenv("WAN_REPO_PATH", "/workspace/wan-serverless/wan")
         generator = create_cli_generator("", "I2V-14B-480P", use_mock=True, wan_repo_path=wan_repo_path)
+    
+    # Start background worker thread
+    worker_thread = threading.Thread(target=worker_loop, daemon=True)
+    worker_thread.start()
+    logger.info("✅ Background worker thread started successfully")
 
 @app.get("/health")
 def health_check():
@@ -85,49 +167,38 @@ def health_check():
 
 @app.post("/generate")
 def generate_video(req: GenerationRequest):
-    """POST endpoint to generate video from prompt/image"""
+    """POST endpoint to queue video generation from prompt/image"""
     global generator
     
     if generator is None:
         raise HTTPException(status_code=503, detail="Model is still initializing. Please try again in a few moments.")
     
-    logger.info(f"Received generation request for prompt: {req.prompt[:50]}. Waiting for lock...")
-    with generation_lock:
-        logger.info(f"Lock acquired. Starting generation for prompt: {req.prompt[:50]}")
-        try:
-            # Validate inputs
-            if req.duration_seconds <= 0:
-                raise HTTPException(status_code=400, detail="duration_seconds must be greater than 0")
-            
-            if req.fps <= 0 or req.fps > 60:
-                raise HTTPException(status_code=400, detail="fps must be between 1 and 60")
-            
-            # Generate video
-            video_base64 = generator.generate_video(
-                prompt=req.prompt,
-                image=req.image,
-                negative_prompt=req.negative_prompt,
-                width=req.width,
-                height=req.height,
-                duration_seconds=req.duration_seconds,
-                fps=req.fps,
-                guidance_scale=req.guidance_scale,
-                num_inference_steps=req.num_inference_steps,
-                seed=req.seed,
-                resolution_preset=req.resolution_preset
-            )
-            
-            return {
-                "video_base64": video_base64,
-                "prompt": req.prompt,
-                "duration_seconds": req.duration_seconds,
-                "fps": req.fps,
-                "resolution": f"{req.width}x{req.height}",
-                "has_input_image": req.image is not None,
-                "model_type": model_info.get("model_type", "unknown") if model_info else "mock",
-                "loras_loaded": len(model_info.get("lora_paths", [])) if model_info else 0
-            }
-            
-        except Exception as e:
-            logger.error(f"generation failed: {e}")
-            raise HTTPException(status_code=500, detail=str(e))
+    # Run cleanup of old completed jobs
+    cleanup_old_jobs()
+    
+    job_id = str(uuid.uuid4())
+    logger.info(f"Queuing generation request: {job_id} for prompt: {req.prompt[:50]}")
+    
+    with jobs_lock:
+        jobs[job_id] = {
+            "status": "queued",
+            "result": None,
+            "error": None,
+            "created_at": time.time()
+        }
+    
+    task_queue.put((job_id, req))
+    return {
+        "job_id": job_id,
+        "status": "queued"
+    }
+
+@app.get("/status/{job_id}")
+def get_status(job_id: str):
+    """GET endpoint to poll status of video generation job"""
+    cleanup_old_jobs()
+    
+    with jobs_lock:
+        if job_id not in jobs:
+            raise HTTPException(status_code=404, detail="Job not found")
+        return jobs[job_id]
