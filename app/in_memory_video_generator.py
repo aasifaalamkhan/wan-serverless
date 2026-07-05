@@ -124,27 +124,43 @@ class InMemoryVideoGenerator:
             
         self.cfg = WAN_CONFIGS[self.task]
         
-        # Determine offloading based on VRAM capacity
+        # Determine offloading based on VRAM capacity, allowing override via environment variable FORCE_OFFLOAD
+        force_offload = os.getenv("FORCE_OFFLOAD", "False").lower() in ("true", "1", "yes")
         total_memory = torch.cuda.get_device_properties(0).total_memory
-        # We enable CPU offloading for L40S (48GB) to prevent VRAM OOM, but keep it in a single process
-        self.use_offload = total_memory <= 60 * 1024 * 1024 * 1024
+        self.use_offload = force_offload or (total_memory <= 60 * 1024 * 1024 * 1024)
         
         logger.info(f"Initializing InMemoryVideoGenerator for model: {model_type}")
         logger.info(f"Detected GPU VRAM: {total_memory / (1024**3):.2f} GB. Use CPU offloading: {self.use_offload}")
         
-        # Load the Wan pipeline in-memory using our OOM-safe subclass
+        # Load the Wan pipeline in-memory. If high VRAM is available, use the official loader directly.
         logger.info(f"Loading WanI2V pipeline from {self.model_path}...")
-        self.pipeline = OOMSafeWanI2V(
-            config=self.cfg,
-            checkpoint_dir=self.model_path,
-            device_id=0,
-            rank=0,
-            t5_fsdp=False,
-            dit_fsdp=False,
-            use_sp=False,
-            t5_cpu=False,
-            convert_model_dtype=True
-        )
+        if not self.use_offload:
+            logger.info("High VRAM and RAM detected. Using official WanI2V loader directly on GPU.")
+            self.pipeline = WanI2V(
+                config=self.cfg,
+                checkpoint_dir=self.model_path,
+                device_id=0,
+                rank=0,
+                t5_fsdp=False,
+                dit_fsdp=False,
+                use_sp=False,
+                t5_cpu=False,
+                init_on_cpu=False,
+                convert_model_dtype=False
+            )
+        else:
+            logger.info("Limited VRAM/RAM detected. Using OOM-safe sequential loader.")
+            self.pipeline = OOMSafeWanI2V(
+                config=self.cfg,
+                checkpoint_dir=self.model_path,
+                device_id=0,
+                rank=rank if 'rank' in locals() else 0,
+                t5_fsdp=False,
+                dit_fsdp=False,
+                use_sp=False,
+                t5_cpu=False,
+                convert_model_dtype=True
+            )
         logger.info("✅ WanI2V pipeline loaded successfully inside memory!")
 
     def generate_video(self, prompt, image, negative_prompt="", width=832, height=480, duration_seconds=3.0, fps=16, guidance_scale=5.0, num_inference_steps=20, seed=None, resolution_preset=None):
@@ -180,7 +196,7 @@ class InMemoryVideoGenerator:
         elif resolution_preset == "square":
             size_str = "832*832"
             
-        max_area = MAX_AREA_CONFIGS[size_str]
+        max_area = MAX_AREA_CONFIGS.get(size_str, width * height)
         
         logger.info(f"🚀 Running in-memory generation (Steps: {num_inference_steps}, Size: {size_str}, Seed: {seed})...")
         

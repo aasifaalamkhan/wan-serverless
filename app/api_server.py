@@ -13,9 +13,13 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Wan Video Generation API", version="1.0")
 
+import threading
+
 # Global variables for model
 generator = None
 model_info = None
+generation_lock = threading.Lock()
+
 
 class GenerationRequest(BaseModel):
     prompt: str
@@ -87,41 +91,43 @@ def generate_video(req: GenerationRequest):
     if generator is None:
         raise HTTPException(status_code=503, detail="Model is still initializing. Please try again in a few moments.")
     
-    try:
-        # Validate inputs
-        if req.duration_seconds <= 0:
-            raise HTTPException(status_code=400, detail="duration_seconds must be greater than 0")
-        
-        if req.fps <= 0 or req.fps > 60:
-            raise HTTPException(status_code=400, detail="fps must be between 1 and 60")
-        
-        # Generate video
-        logger.info(f"Received generation request for prompt: {req.prompt[:50]}")
-        video_base64 = generator.generate_video(
-            prompt=req.prompt,
-            image=req.image,
-            negative_prompt=req.negative_prompt,
-            width=req.width,
-            height=req.height,
-            duration_seconds=req.duration_seconds,
-            fps=req.fps,
-            guidance_scale=req.guidance_scale,
-            num_inference_steps=req.num_inference_steps,
-            seed=req.seed,
-            resolution_preset=req.resolution_preset
-        )
-        
-        return {
-            "video_base64": video_base64,
-            "prompt": req.prompt,
-            "duration_seconds": req.duration_seconds,
-            "fps": req.fps,
-            "resolution": f"{req.width}x{req.height}",
-            "has_input_image": req.image is not None,
-            "model_type": model_info.get("model_type", "unknown") if model_info else "mock",
-            "loras_loaded": len(model_info.get("lora_paths", [])) if model_info else 0
-        }
-        
-    except Exception as e:
-        logger.error(f"generation failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    logger.info(f"Received generation request for prompt: {req.prompt[:50]}. Waiting for lock...")
+    with generation_lock:
+        logger.info(f"Lock acquired. Starting generation for prompt: {req.prompt[:50]}")
+        try:
+            # Validate inputs
+            if req.duration_seconds <= 0:
+                raise HTTPException(status_code=400, detail="duration_seconds must be greater than 0")
+            
+            if req.fps <= 0 or req.fps > 60:
+                raise HTTPException(status_code=400, detail="fps must be between 1 and 60")
+            
+            # Generate video
+            video_base64 = generator.generate_video(
+                prompt=req.prompt,
+                image=req.image,
+                negative_prompt=req.negative_prompt,
+                width=req.width,
+                height=req.height,
+                duration_seconds=req.duration_seconds,
+                fps=req.fps,
+                guidance_scale=req.guidance_scale,
+                num_inference_steps=req.num_inference_steps,
+                seed=req.seed,
+                resolution_preset=req.resolution_preset
+            )
+            
+            return {
+                "video_base64": video_base64,
+                "prompt": req.prompt,
+                "duration_seconds": req.duration_seconds,
+                "fps": req.fps,
+                "resolution": f"{req.width}x{req.height}",
+                "has_input_image": req.image is not None,
+                "model_type": model_info.get("model_type", "unknown") if model_info else "mock",
+                "loras_loaded": len(model_info.get("lora_paths", [])) if model_info else 0
+            }
+            
+        except Exception as e:
+            logger.error(f"generation failed: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
