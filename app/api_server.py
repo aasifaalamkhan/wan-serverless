@@ -6,7 +6,7 @@ import logging
 import base64
 import threading
 import uuid
-import collections
+import queue
 import time
 import requests
 from model_downloader import ModelDownloader
@@ -24,69 +24,7 @@ model_info = None
 # Job tracking
 jobs = {}
 jobs_lock = threading.Lock()
-
-
-class AlternatingPriorityQueue:
-    """
-    Custom queue that alternates between free-preview tasks (priority=1)
-    and general/paid tasks (priority=2) in a strict 1:1 round-robin fashion.
-    When only one type is available it drains that type without waiting.
-    """
-    def __init__(self):
-        self.free_queue = collections.deque()    # priority == 1
-        self.general_queue = collections.deque() # priority >= 2
-        self.cond = threading.Condition()
-        self.unfinished_tasks = 0
-        self.next_type = "free"  # Which type to pick next when both queues have items
-
-    def put(self, item):
-        job_id, req = item
-        priority = getattr(req, "priority", 2)
-        with self.cond:
-            if priority == 1:
-                self.free_queue.append(item)
-            else:
-                self.general_queue.append(item)
-            self.unfinished_tasks += 1
-            self.cond.notify()
-
-    def get(self):
-        with self.cond:
-            while not self.free_queue and not self.general_queue:
-                self.cond.wait()
-
-            if self.free_queue and self.general_queue:
-                # Both queues have items: alternate strictly
-                if self.next_type == "free":
-                    item = self.free_queue.popleft()
-                    self.next_type = "general"
-                else:
-                    item = self.general_queue.popleft()
-                    self.next_type = "free"
-            elif self.free_queue:
-                item = self.free_queue.popleft()
-                self.next_type = "general"
-            else:
-                item = self.general_queue.popleft()
-                self.next_type = "free"
-
-            return item
-
-    def task_done(self):
-        with self.cond:
-            if self.unfinished_tasks <= 0:
-                raise ValueError("task_done() called too many times")
-            self.unfinished_tasks -= 1
-            if self.unfinished_tasks == 0:
-                self.cond.notify_all()
-
-    def join(self):
-        with self.cond:
-            while self.unfinished_tasks > 0:
-                self.cond.wait()
-
-
-task_queue = AlternatingPriorityQueue()
+task_queue = queue.Queue()
 
 class GenerationRequest(BaseModel):
     prompt: str
@@ -104,7 +42,6 @@ class GenerationRequest(BaseModel):
     task_id: Optional[str] = None
     callback_url: Optional[str] = None
     webhook_secret: Optional[str] = None
-    priority: Optional[int] = 2  # 1 = free-preview (high), 2 = paid/general (normal)
 
 def cleanup_old_jobs():
     """Delete completed/failed jobs that are older than 5 minutes to free RAM"""
