@@ -403,7 +403,7 @@ class InMemoryVideoGenerator:
         # Determine offloading based on VRAM capacity, allowing override via environment variable FORCE_OFFLOAD
         force_offload = os.getenv("FORCE_OFFLOAD", "False").lower() in ("true", "1", "yes")
         total_memory = torch.cuda.get_device_properties(self.device_id).total_memory
-        self.use_offload = force_offload or (total_memory <= 60 * 1024 * 1024 * 1024)
+        self.use_offload = force_offload or (total_memory <= 38 * 1024 * 1024 * 1024)
         
         logger.info(f"Initializing InMemoryVideoGenerator for model: {model_type} on GPU {self.device_id}")
         logger.info(f"Detected GPU VRAM on GPU {self.device_id}: {total_memory / (1024**3):.2f} GB. Use CPU offloading: {self.use_offload}")
@@ -419,7 +419,7 @@ class InMemoryVideoGenerator:
                 t5_fsdp=False,
                 dit_fsdp=False,
                 use_sp=False,
-                t5_cpu=False,
+                t5_cpu=True,
                 init_on_cpu=self.use_offload,
                 convert_model_dtype=True
             )
